@@ -11,7 +11,7 @@ def extract_points(resp, measurement):
             if not fields or not values:
                 continue
 
-            time_idx = next((i for i, f in enumerate(fields) if f.get("name") == "Time"), None)
+            time_idx = next((i for i, f in enumerate(fields) if f.get("name") in ["Time","time"]), None)
             value_idx = next((i for i, f in enumerate(fields) if f.get("name") in ["Value", "_value"]), None)
             if time_idx is None or value_idx is None:
                 continue
