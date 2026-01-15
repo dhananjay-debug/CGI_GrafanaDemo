@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Smart Factory Chatbot</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #c8e3e5;
+      margin: 20px;
+      padding: 20px;
+    }
+    h1 {
+
+      color: #2c2b2b;
+      text-align: center;    
+      padding: 6px 14px;
+      border: 2px solid #242323;
+      border-radius: 6px;
+      background: transparent;
+
+    }
+    .container {
+      max-width: 900px;
+      margin: auto;
+      background: #98aab7;
+      padding: 20px;
+      border-radius: 12px;
+      box-shadow: 0px 0px 8px 8px rgba(128, 127, 127, 0.3)
+    }
+    .container h1 {background:#dcecf5}
+
+    input[type=text] {
+      width: 88%;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #bff6ef;
+      font-size: 16px;
+      margin-right: 10px;
+    }
+    button {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 8px;
+      background-color: #374860;
+      color: #f8f7f7;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #b0b0e2;
+    }
+    .chatbot-summary {
+      margin-top: 20px;
+      padding: 15px;
+      background: #a2daee;
+      border-radius: 12px;
+      line-height: 1.6;
+      font-size: 16px;
+      white-space: pre-wrap;
+    }
+    table {
+      width: 100%;
+      margin-top: 20px;
+    }
+    th, td {
+      text-align: left;
+      padding: 10px;
+      border-bottom: 1px solid #b2e1f1;
+      border-radius: 8px;
+    }
+    td {
+      color: white;
+    }
+    th {
+      background-color: #ced7d8;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Smart Factory Conversational Analytics</h1>
+
+    <div>
+      <input type="text" id="query" placeholder="Type your question here...">
+      <button onclick="ask()">Ask</button>
+    </div>
+
+    <!-- Chatbot style summary -->
+    <div class="chatbot-summary" id="summary"></div>
+
+    <!-- Table for sample points -->
+    <table id="pointsTable">
+      <thead>
+        <tr>
+          <th>Measurement</th>
+          <th>Field</th>
+          <th>Value</th>
+          <th>Topic</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <script>
+    async function ask() {
+      const query = document.getElementById("query").value;
+      if (!query) return;
+
+      document.getElementById("summary").innerText = "Loading...";
+      document.querySelector("#pointsTable tbody").innerHTML = "";
+
+      try {
+        const res = await fetch("http://127.0.0.1:8000/nl-query", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({query})
+        });
+
+        if (!res.ok) {
+          const text = await res.text();
+          document.getElementById("summary").innerText = "Error: " + text;
+          return;
+        }
+
+        const data = await res.json();
+
+        // Clean summary: remove extra ":\\n\\n**(%):\\n" or other unwanted chars
+        let summary = data.summary || "";
+        summary = summary.replace(/[:]*\n*\**\(?%?\)?:*\n*/g, '').trim();
+
+        // Show in chatbot style
+        document.getElementById("summary").innerText = summary;
+
+        // Fill table
+        const tbody = document.querySelector("#pointsTable tbody");
+        data.sample_points.forEach(p => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${p.measurement}</td>
+            <td>${p.field}</td>
+            <td>${p.value}</td>
+            <td>${p.topic || '-'}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+
+      } catch (err) {
+        document.getElementById("summary").innerText = "Error: " + err;
+      }
+    }
+  </script>
+</body>
+</html>
