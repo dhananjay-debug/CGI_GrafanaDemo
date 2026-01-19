@@ -8,7 +8,7 @@ from app.sensor import SENSOR_CONFIG, STATUS_MAP
 from app.config import GRAFANA_API_KEY, GRAFANA_HOST, INFLUX_DATASOURCE_UID
 import requests
 import logging
-from datetime import datetime
+import re
 
 app = FastAPI(title="Agentic Smart Factory API")
 
@@ -41,6 +41,7 @@ def nl_query(req: dict):
         all_points = []
         reasoning_report = {}
 
+        # ---------------- Process each sensor ----------------
         for field in fields:
             if field not in SENSOR_CONFIG:
                 continue
@@ -82,23 +83,44 @@ def nl_query(req: dict):
             )
 
             points = extract_points(r.json(), field)
-            all_points.extend(points)
 
-            # ---------------- Compute stats ----------------
-            values = [p.get("value") for p in points if p.get("value") is not None]
+            # ---------------- Filter points based on query condition ----------------
+            numeric_values = []
+            filtered_points = []
 
-            # --- Handle status sensors separately ---
-            if cfg["measurement"] == "sensor_status":
-                stats = {"min_value": None, "max_value": None, "avg_value": None, "count": len(values)}
-            else:
-                # Convert numeric values safely
-                numeric_values = []
-                for v in values:
+            if cfg["measurement"] != "sensor_status":
+                # identify threshold conditions from query
+                matches = re.findall(r"(below|under|less than|above|over|greater than)\s*(-?\d+\.?\d*)", query.lower())
+                for p in points:
+                    val = p.get("value")
                     try:
-                        numeric_values.append(float(v))
+                        val_float = float(val)
                     except (TypeError, ValueError):
                         continue
 
+                    keep = True
+                    for comparator, threshold in matches:
+                        threshold = float(threshold)
+                        if comparator in ["below", "under", "less than"]:
+                            if val_float >= threshold:
+                                keep = False
+                        elif comparator in ["above", "over", "greater than"]:
+                            if val_float <= threshold:
+                                keep = False
+                    if keep:
+                        filtered_points.append(p)
+                        numeric_values.append(val_float)
+                points = filtered_points
+            else:
+                # For status, keep all points as is
+                numeric_values = []
+
+            all_points.extend(points)
+
+            # ---------------- Compute stats ----------------
+            if cfg["measurement"] == "sensor_status":
+                stats = {"min_value": None, "max_value": None, "avg_value": None, "count": len(points)}
+            else:
                 stats = {
                     "min_value": min(numeric_values) if numeric_values else None,
                     "max_value": max(numeric_values) if numeric_values else None,
@@ -110,59 +132,35 @@ def nl_query(req: dict):
             reasoning_cfg = cfg.get("reasoning", {})
             reasoning_parts = []
 
-            # --- Status sensors reasoning ---
             if cfg["measurement"] == "sensor_status":
-                if values:
-                    last_val = values[-1].lower()
-                    last_time = points[-1]["time"] if points else None
-                    formatted_time = last_time
-                    if last_time:
-                        dt = datetime.fromisoformat(last_time.replace("Z", "+00:00"))
-                        formatted_time = dt.strftime("%B %d, %Y at %I:%M %p UTC")
-
-                    status_text = STATUS_MAP.get(last_val, last_val.upper())
+                if not points and reasoning_cfg.get("check_missing", False):
+                    reasoning_parts.append(f"No status data recorded for '{field}' yesterday.")
+                elif points:
+                    last_val = str(points[-1].get("value")).lower()
                     reasoning_parts.append(
-                        f"The sensor last sent a report on {formatted_time} and is now {status_text}."
+                        f"The sensor is currently {STATUS_MAP.get(last_val, last_val.upper())}."
                     )
-                else:
-                    if reasoning_cfg.get("check_missing", False):
-                        reasoning_parts.append(f"No status data recorded for '{field}' yesterday.")
-
-            # --- Numeric sensors reasoning ---
             else:
-                if stats["count"] == 0 and reasoning_cfg.get("check_missing", False):
-                    reasoning_parts.append(f"No data recorded for '{field}' yesterday.")
+                if stats["count"] == 0:
+                    reasoning_parts.append(f"No {field} readings match your query condition.")
                 else:
-                    # Check constant readings
                     if reasoning_cfg.get("check_constant", False) and stats["min_value"] == stats["max_value"]:
                         reasoning_parts.append(
                             f"Sensor value constant at {stats['min_value']:.2f}; may indicate a malfunction or lack of change."
                         )
-
-                    # Trend/consistency comment
-                    if len(values) > 1:
-                        delta = max(numeric_values) - min(numeric_values)
+                    if stats["count"] > 1 and len(numeric_values) > 1:
+                        delta = stats["max_value"] - stats["min_value"]
                         if delta < 0.1 * abs(stats['avg_value'] or 1):
                             reasoning_parts.append(
                                 "The readings show minimal fluctuation, indicating stable measurements."
                             )
 
-                    # Human-readable stats with unit and last timestamp
                     unit = cfg.get("unit", "")
-                    last_time = points[-1]["time"] if points else None
-                    formatted_time = last_time
-                    if last_time:
-                        dt = datetime.fromisoformat(last_time.replace("Z", "+00:00"))
-                        formatted_time = dt.strftime("%B %d, %Y at %I:%M %p UTC")
-
                     reasoning_parts.append(
-                        f"{field.capitalize()} readings as of {formatted_time}: "
-                        f"average {stats['avg_value']:.2f}{unit}, "
-                        f"low {stats['min_value']:.2f}{unit}, "
-                        f"high {stats['max_value']:.2f}{unit}."
+                        f"The {field} was usually around {stats['avg_value']:.2f}{unit}, "
+                        f"going as low as {stats['min_value']:.2f}{unit} and as high as {stats['max_value']:.2f}{unit}."
                     )
 
-                    # Check against expected range
                     expected = reasoning_cfg.get("expected_range")
                     if expected and stats["min_value"] is not None:
                         if stats["min_value"] < expected[0] or stats["max_value"] > expected[1]:
@@ -187,7 +185,6 @@ def nl_query(req: dict):
         for field, text in reasoning_report.items():
             summary += f"\n{field} reasoning: {text}"
 
-        # ---------------- Return JSON ----------------
         return {
             "query": query,
             "summary": summary,
@@ -195,6 +192,8 @@ def nl_query(req: dict):
             "reasoning": reasoning_report
         }
 
+    except HTTPException as he:
+        raise he
     except Exception as e:
         logging.exception("Error in /nl-query")
         raise HTTPException(status_code=500, detail=str(e))
