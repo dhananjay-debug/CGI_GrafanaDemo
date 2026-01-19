@@ -23,7 +23,7 @@ SENSOR_CONFIG = {
     "status": {
         "measurement": "sensor_status",
         "field": "status",
-        "topics": ["status"]
+        "topics": ["sensors/cảm biến nhiệt độ, độ ẩm/status"]
     }
 }
 
