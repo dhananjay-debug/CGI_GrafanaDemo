@@ -11,7 +11,11 @@ def format_time(ts: str) -> str:
     return dt.strftime("%B %d, %Y at %I:%M %p UTC")
 
 
-def compute_summary(points):
+def compute_summary(points, reasoning_report=None):
+    """
+    Build a human-readable summary for sensor points.
+    Optional: append reasoning text per field.
+    """
     if not points:
         return "No sensor data available."
 
@@ -27,13 +31,12 @@ def compute_summary(points):
         if sensor == "status":
             latest = sorted(vals, key=lambda x: x["time"])[-1]
             value = latest["value"]
-            print("gggg",value)
 
-            # ✅ Already interpreted (ONLINE / OFFLINE)
+            # Already interpreted (ONLINE / OFFLINE)
             if isinstance(value, str):
-                status_text = value
+                status_text = value.upper()
             else:
-                # backward compatibility
+                # backward compatibility: numeric status
                 status_text = "ONLINE" if int(value) == 1 else "OFFLINE"
 
             formatted_time = format_time(latest["time"])
@@ -53,12 +56,20 @@ def compute_summary(points):
             if not nums:
                 continue
 
+            avg_val = sum(nums) / len(nums)
+            min_val = min(nums)
+            max_val = max(nums)
+
             summaries.append(
                 f"{sensor.capitalize()} → "
-                f"avg {sum(nums)/len(nums):.2f}, "
-                f"min {min(nums):.2f}, "
-                f"max {max(nums):.2f}"
+                f"avg {avg_val:.2f}, "
+                f"min {min_val:.2f}, "
+                f"max {max_val:.2f}"
             )
+
+            # ---------------- Append reasoning if available ----------------
+            if reasoning_report and sensor in reasoning_report:
+                summaries.append(f"{sensor.capitalize()} reasoning: {reasoning_report[sensor]}")
 
     summary_text = " | ".join(summaries)
 
