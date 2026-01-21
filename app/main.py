@@ -82,7 +82,7 @@ def nl_query(req: dict):
             filtered_points = []
             numeric_values = []
 
-            if cfg["measurement"] != "sensor_status":
+            if cfg["measurement"] != "status":
                 matches = re.findall(
                     r"(below|under|less than|above|over|greater than)\s*(-?\d+\.?\d*)",
                     query.lower()
