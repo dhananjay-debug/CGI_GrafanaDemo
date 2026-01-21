@@ -1,22 +1,25 @@
 from collections import defaultdict
-from app.config import openai_client
 from datetime import datetime
+import re
 
 def format_time(ts: str) -> str:
-    """
-    Convert ISO timestamp (UTC) to readable format
-    e.g. '2026-01-19T08:00:00Z' → 'January 19, 2026 at 08:00 AM UTC'
-    """
     dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
     return dt.strftime("%B %d, %Y at %I:%M %p UTC")
 
 
+def split_sentences(text):
+    """
+    Split text into sentences without breaking decimal numbers.
+    Uses regex to handle periods that are not part of numbers.
+    """
+    if not text:
+        return []
+    # Match periods that are followed by space and capital letter, or end of string
+    sentences = re.split(r'(?<!\d)\.(?:\s+|$)', text)
+    return [s.strip() for s in sentences if s.strip()]
+
+
 def compute_summary(points, reasoning_report=None):
-    """
-    Build a human-readable summary for sensor points.
-    Optional: append reasoning text per field.
-    Handles numeric sensors, status sensors, and filtered thresholds.
-    """
     if not points:
         return "No sensor data available."
 
@@ -33,57 +36,34 @@ def compute_summary(points, reasoning_report=None):
             latest = sorted(vals, key=lambda x: x["time"])[-1]
             value = latest["value"]
 
-            # Already interpreted (ONLINE / OFFLINE)
-            if isinstance(value, str):
-                status_text = value.upper()
-            else:
-                # backward compatibility: numeric status
-                status_text = "ONLINE" if int(value) == 1 else "OFFLINE"
-
+            status_text = value.upper() if isinstance(value, str) else "ONLINE" if int(value) == 1 else "OFFLINE"
             formatted_time = format_time(latest["time"])
 
-            if status_text == "OFFLINE":
-                summaries.append(
-                    f"The sensor last reported at {formatted_time} and is currently OFFLINE."
-                )
-            else:
-                summaries.append(
-                    f"The sensor is currently ONLINE. Last update was at {formatted_time}."
-                )
+            summaries.append(f"• {sensor.capitalize()} - Last reported at {formatted_time} - Status: {status_text}")
+
+            if reasoning_report and sensor in reasoning_report:
+                for s in split_sentences(reasoning_report[sensor]):
+                    summaries.append(f"  • Insight: {s}.")
 
         # ---------------- NUMERIC SENSORS ----------------
         else:
-            # Keep only numeric values
             nums = [v['value'] for v in vals if isinstance(v['value'], (int, float))]
 
             if not nums:
-                summaries.append(f"No {sensor} readings available or matched the query condition.")
+                summaries.append(f"• {sensor.capitalize()} - No readings match your query condition.")
                 continue
 
             avg_val = sum(nums) / len(nums)
             min_val = min(nums)
             max_val = max(nums)
 
-            summaries.append(
-                f"{sensor.capitalize()} → avg {avg_val:.2f}, min {min_val:.2f}, max {max_val:.2f}"
-            )
+            # Numeric summary
+            summaries.append(f"• {sensor.capitalize()} - Average {avg_val:.2f} - Minimum {min_val:.2f} - Maximum {max_val:.2f}")
 
-            # Append reasoning if available
+            # Add reasoning as separate bullets
             if reasoning_report and sensor in reasoning_report:
-                summaries.append(f"{sensor.capitalize()} reasoning: {reasoning_report[sensor]}")
+                for s in split_sentences(reasoning_report[sensor]):
+                    summaries.append(f" • Insight: {s}.")
 
-    summary_text = " | ".join(summaries)
-
-    # ---------------- OPTIONAL AI REWRITE ----------------
-    if openai_client:
-        try:
-            ai = openai_client.responses.create(
-                model="gpt-4.1-mini",
-                input=f"Rewrite this sensor summary in simple language:\n{summary_text}"
-            )
-            if getattr(ai, "output_text", None):
-                summary_text = ai.output_text.strip()
-        except Exception:
-            pass
-
-    return summary_text
+    # Join with newline to preserve bullets
+    return "\n".join(summaries)

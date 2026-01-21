@@ -19,29 +19,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 @app.get("/ping")
 def ping():
     return {"pong": True}
-
 
 @app.get("/")
 def root():
     return {"status": "Smart Factory API running"}
 
-
 @app.post("/nl-query")
 def nl_query(req: dict):
     try:
         query = req.get("query", "")
-
-        # ---------------- Parse NL query ----------------
         start, end, fields, tags = parse_nl_query(query)
 
         all_points = []
         reasoning_report = {}
 
-        # ---------------- Process each sensor ----------------
         for field in fields:
             if field not in SENSOR_CONFIG:
                 continue
@@ -85,12 +79,14 @@ def nl_query(req: dict):
             points = extract_points(r.json(), field)
 
             # ---------------- Filter points based on query condition ----------------
-            numeric_values = []
             filtered_points = []
+            numeric_values = []
 
             if cfg["measurement"] != "sensor_status":
-                # identify threshold conditions from query
-                matches = re.findall(r"(below|under|less than|above|over|greater than)\s*(-?\d+\.?\d*)", query.lower())
+                matches = re.findall(
+                    r"(below|under|less than|above|over|greater than)\s*(-?\d+\.?\d*)",
+                    query.lower()
+                )
                 for p in points:
                     val = p.get("value")
                     try:
@@ -107,19 +103,22 @@ def nl_query(req: dict):
                         elif comparator in ["above", "over", "greater than"]:
                             if val_float <= threshold:
                                 keep = False
+
                     if keep:
                         filtered_points.append(p)
                         numeric_values.append(val_float)
                 points = filtered_points
-            else:
-                # For status, keep all points as is
-                numeric_values = []
 
             all_points.extend(points)
 
             # ---------------- Compute stats ----------------
             if cfg["measurement"] == "sensor_status":
-                stats = {"min_value": None, "max_value": None, "avg_value": None, "count": len(points)}
+                stats = {
+                    "min_value": None,
+                    "max_value": None,
+                    "avg_value": None,
+                    "count": len(points)
+                }
             else:
                 stats = {
                     "min_value": min(numeric_values) if numeric_values else None,
@@ -134,7 +133,7 @@ def nl_query(req: dict):
 
             if cfg["measurement"] == "sensor_status":
                 if not points and reasoning_cfg.get("check_missing", False):
-                    reasoning_parts.append(f"No status data recorded for '{field}' yesterday.")
+                    reasoning_parts.append(f"No status data recorded for '{field}'.")
                 elif points:
                     last_val = str(points[-1].get("value")).lower()
                     reasoning_parts.append(
@@ -146,49 +145,50 @@ def nl_query(req: dict):
                 else:
                     if reasoning_cfg.get("check_constant", False) and stats["min_value"] == stats["max_value"]:
                         reasoning_parts.append(
-                            f"Sensor value constant at {stats['min_value']:.2f}; may indicate a malfunction or lack of change."
+                            f"Sensor value constant at {stats['min_value']:.2f}; may indicate a malfunction."
                         )
+
                     if stats["count"] > 1 and len(numeric_values) > 1:
                         delta = stats["max_value"] - stats["min_value"]
                         if delta < 0.1 * abs(stats['avg_value'] or 1):
                             reasoning_parts.append(
-                                "The readings show minimal fluctuation, indicating stable measurements."
+                                "Readings show minimal fluctuation, indicating stable measurements."
                             )
 
                     unit = cfg.get("unit", "")
                     reasoning_parts.append(
-                        f"The {field} was usually around {stats['avg_value']:.2f}{unit}, "
-                        f"going as low as {stats['min_value']:.2f}{unit} and as high as {stats['max_value']:.2f}{unit}."
+                        f"Readings around {stats['avg_value']:.2f}{unit}, range {stats['min_value']:.2f}–{stats['max_value']:.2f}{unit}."
                     )
 
                     expected = reasoning_cfg.get("expected_range")
                     if expected and stats["min_value"] is not None:
                         if stats["min_value"] < expected[0] or stats["max_value"] > expected[1]:
                             reasoning_parts.append(
-                                f"These readings are outside the expected range ({expected[0]}–{expected[1]})."
+                                f"Outside expected range ({expected[0]}–{expected[1]})."
                             )
                         else:
                             reasoning_parts.append(
-                                f"These readings are within the expected operational range ({expected[0]}–{expected[1]})."
+                                f"Within expected operational range ({expected[0]}–{expected[1]})."
                             )
 
             reasoning_report[field] = " ".join(reasoning_parts)
 
-        # ---------------- Inject reasoning into sample points ----------------
+        # ---------------- Inject reasoning into points ----------------
         for p in all_points:
             field = p.get("field")
             if field in reasoning_report:
                 p["reasoning"] = reasoning_report[field]
 
-        # ---------------- Compute summary ----------------
+        # ---------------- Compute bullet-style summary ----------------
         summary = compute_summary(all_points, reasoning_report=reasoning_report)
-        for field, text in reasoning_report.items():
-            summary += f"\n{field} reasoning: {text}"
+
+        # Remove sample points entirely if none match threshold
+        points_to_return = [p for p in all_points if p.get("value") is not None]
 
         return {
             "query": query,
             "summary": summary,
-            "sample_points": all_points,
+            "sample_points": points_to_return,
             "reasoning": reasoning_report
         }
 
